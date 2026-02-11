@@ -5,24 +5,23 @@ import tkinter as tk
 import RPi.GPIO as GPIO
 import board
 import busio
-import adafruit_vl53l0x  # Libreria per il nuovo sensore
+import adafruit_vl53l0x
 from DFRobot_TMF8x01 import DFRobot_TMF8801 as tof
 
 class DistanceApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Monitor Statimetri: Laser TMF + Laser VL53 + Ultrasuoni")
-        self.root.geometry("1000x900") # Aumentata l'altezza per far spazio al terzo sensore
+        self.root.title("Monitor Statimetri: Lettura Sequenziale Pura")
+        self.root.geometry("1280x700")
         self.root.configure(bg="#1e1e1e")
 
         # --- COSTANTI ---
         self.ALTEZZA_SENSORE_CM = 219.0
         self.NUM_LETTURE_ULTRASUONI = 5
 
-        # --- PARAMETRI DI COMPENSAZIONE LINEARE (y = mx + q) ---
+        # --- PARAMETRI DI COMPENSAZIONE ---
         self.M_LASER = 0.954826
         self.Q_LASER = 6.560159
-
         self.M_ULTRA = 1.019716
         self.Q_ULTRA = -3.550358
 
@@ -34,64 +33,53 @@ class DistanceApp:
         GPIO.setup(self.PIN_TRIGGER, GPIO.OUT)
         GPIO.setup(self.PIN_ECHO, GPIO.IN)
 
-        # Inizializzazione Bus I2C per VL53L0X
         self.i2c_bus = busio.I2C(board.SCL, board.SDA)
 
         # --- INIZIALIZZAZIONE SENSORI ---
-        # 1. Laser TMF8801 (quello originale)
+        # 1. Laser TMF8801
         self.sensor_tmf = tof(enPin = -1, intPin = -1, bus_id = 1)
         
-        # 2. Laser VL53L0X (il nuovo)
+        # 2. Laser VL53L0X
         try:
             self.sensor_vl53 = adafruit_vl53l0x.VL53L0X(self.i2c_bus)
+            # Riduciamo il tempo di campionamento per velocizzare la sequenza
+            self.sensor_vl53.measurement_timing_budget = 33000 # 33ms
             self.vl53_attivo = True
         except Exception as e:
-            print(f"Errore inizializzazione VL53L0X: {e}")
+            print(f"Errore VL53L0X: {e}")
             self.vl53_attivo = False
 
         # --- INTERFACCIA GRAFICA ---
-        tk.Label(root, text="SISTEMA DI MISURA ALTEZZA", font=("Arial", 26, "bold"),
+        tk.Label(root, text="COMPARATIVA SEQUENZIALE", font=("Arial", 26, "bold"),
                  bg="#1e1e1e", fg="white").pack(pady=10)
 
-        # Frame Laser TMF8801 (Verde)
+        # Frame TMF8801
         self.frame_laser = tk.Frame(root, bg="#1e1e1e", highlightbackground="#28a745", highlightthickness=2)
         self.frame_laser.pack(pady=5, padx=20, fill="both")
-        tk.Label(self.frame_laser, text="LASER TMF8801 (Originale)", font=("Arial", 14),
-                 bg="#1e1e1e", fg="#28a745").pack()
         self.laser_var = tk.StringVar(value="---")
-        self.label_laser = tk.Label(self.frame_laser, textvariable=self.laser_var,
-                                    font=("Arial", 80, "bold"), bg="#1e1e1e", fg="#28a745")
-        self.label_laser.pack()
+        tk.Label(self.frame_laser, textvariable=self.laser_var, font=("Arial", 80, "bold"), bg="#1e1e1e", fg="#28a745").pack()
 
-        # Frame Laser VL53L0X (Arancione) - IL NUOVO SENSORE
+        # Frame VL53L0X
         self.frame_vl53 = tk.Frame(root, bg="#1e1e1e", highlightbackground="#ff8c00", highlightthickness=2)
         self.frame_vl53.pack(pady=5, padx=20, fill="both")
-        tk.Label(self.frame_vl53, text="LASER VL53L0X (Nuovo)", font=("Arial", 14),
-                 bg="#1e1e1e", fg="#ff8c00").pack()
         self.vl53_var = tk.StringVar(value="---")
-        self.label_vl53 = tk.Label(self.frame_vl53, textvariable=self.vl53_var,
-                                   font=("Arial", 80, "bold"), bg="#1e1e1e", fg="#ff8c00")
-        self.label_vl53.pack()
+        tk.Label(self.frame_vl53, textvariable=self.vl53_var, font=("Arial", 80, "bold"), bg="#1e1e1e", fg="#ff8c00").pack()
 
-        # Frame Ultrasuoni (Blu)
+        # Frame Ultrasuoni
         self.frame_ultra = tk.Frame(root, bg="#1e1e1e", highlightbackground="#007bff", highlightthickness=2)
         self.frame_ultra.pack(pady=5, padx=20, fill="both")
-        tk.Label(self.frame_ultra, text="ULTRASUONI HC-SR04", font=("Arial", 14),
-                 bg="#1e1e1e", fg="#007bff").pack()
         self.ultra_var = tk.StringVar(value="---")
-        self.label_ultra = tk.Label(self.frame_ultra, textvariable=self.ultra_var,
-                                    font=("Arial", 80, "bold"), bg="#1e1e1e", fg="#007bff")
-        self.label_ultra.pack()
+        tk.Label(self.frame_ultra, textvariable=self.ultra_var, font=("Arial", 80, "bold"), bg="#1e1e1e", fg="#007bff").pack()
 
-        # Avvio sensore TMF
         if self.sensor_tmf.begin() == 0:
             self.sensor_tmf.start_measurement(calib_m = self.sensor_tmf.eMODE_CALIB)
         else:
-            self.laser_var.set("ERR")
+            self.laser_var.set("ERR TMF")
 
         self.update_all()
 
     def get_ultrasuoni_filtrato(self):
+        # Misura ultrasuoni isolata
         letture = []
         for _ in range(self.NUM_LETTURE_ULTRASUONI):
             GPIO.output(self.PIN_TRIGGER, GPIO.HIGH)
@@ -102,11 +90,11 @@ class DistanceApp:
             t0 = time.time()
             while GPIO.input(self.PIN_ECHO) == 0:
                 start = time.time()
-                if start - t0 > 0.05: break
+                if start - t0 > 0.04: break
             t0 = time.time()
             while GPIO.input(self.PIN_ECHO) == 1:
                 stop = time.time()
-                if stop - t0 > 0.05: break
+                if stop - t0 > 0.04: break
             dist = ((stop - start) * 34300) / 2
             if 2.0 < dist < self.ALTEZZA_SENSORE_CM:
                 letture.append(dist)
@@ -114,34 +102,45 @@ class DistanceApp:
         return min(letture) if letture else None
 
     def update_all(self):
-        # 1. Lettura LASER TMF8801
+        """ Ciclo di lettura sequenziale: TMF -> VL53 -> HC-SR04 """
+        
+        # 1. Lettura TMF8801
+        # Chiediamo il dato solo se pronto per evitare di bloccare il bus troppo a lungo
         if self.sensor_tmf.is_data_ready():
-            dist_cm = self.sensor_tmf.get_distance_mm() / 10.0
+            dist_tmf_mm = self.sensor_tmf.get_distance_mm()
+            dist_cm = dist_tmf_mm / 10.0
             altezza_raw = max(0, self.ALTEZZA_SENSORE_CM - dist_cm)
             altezza_comp = (altezza_raw * self.M_LASER) + self.Q_LASER
-            self.laser_var.set(f"{altezza_comp:.1f} cm")
+            self.laser_var.set(f"TMF: {altezza_comp:.1f} cm")
+        
+        # Piccola pausa per lasciare che i fotoni del TMF si "esauriscano"
+        time.sleep(0.05)
 
-        # 2. Lettura LASER VL53L0X (Nuovo)
+        # 2. Lettura VL53L0X
         if self.vl53_attivo:
             try:
-                # Lettura in mm trasformata in cm
-                dist_vl_cm = self.sensor_vl53.range / 10.0
+                # La libreria di Adafruit gestisce internamente l'attesa del raggio
+                dist_vl_mm = self.sensor_vl53.range
+                dist_vl_cm = dist_vl_mm / 10.0
                 altezza_vl_raw = max(0, self.ALTEZZA_SENSORE_CM - dist_vl_cm)
-                # Per ora usiamo calibrazione neutra (1:1), puoi correggerla dopo
-                self.vl53_var.set(f"{altezza_vl_raw:.1f} cm")
+                self.vl53_var.set(f"VL53: {altezza_vl_raw:.1f} cm")
             except Exception:
-                self.vl53_var.set("ERR")
+                self.vl53_var.set("ERR VL53")
 
-        # 3. Lettura ULTRASUONI
+        # Altra pausa prima di attivare gli ultrasuoni (rumore elettrico/ottico)
+        time.sleep(0.05)
+
+        # 3. Lettura Ultrasuoni
         dist_u = self.get_ultrasuoni_filtrato()
         if dist_u:
             altezza_u_raw = max(0, self.ALTEZZA_SENSORE_CM - dist_u - 3)
             altezza_u_comp = (altezza_u_raw * self.M_ULTRA) + self.Q_ULTRA
-            self.ultra_var.set(f"{altezza_u_comp:.1f} cm")
+            self.ultra_var.set(f"ULTRA: {altezza_u_comp:.1f} cm")
         else:
-            self.ultra_var.set("---")
+            self.ultra_var.set("ULTRA: ---")
 
-        self.root.after(200, self.update_all)
+        # Il prossimo ciclo avverrà tra 100ms, garantendo un refresh fluido ma ordinato
+        self.root.after(100, self.update_all)
 
 def chiudi():
     GPIO.cleanup()
